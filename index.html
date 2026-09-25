@@ -589,5 +589,14 @@ async function delGasto(id){
 
 (async()=>{await openDB(); await cfg(); go('home')})();
 </script>
+
+<script>
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  });
+}
+</script>
+
 </body>
 </html>
