@@ -396,6 +396,12 @@ async function R_stats(gastos,c){
   mesList.forEach(g=>{const k=g.categoria||'Otros ✨';catMap[k]=(catMap[k]||0)+(parseFloat(g.monto)||0)});
   const cats=Object.entries(catMap).sort((a,b)=>b[1]-a[1]);
   const maxCat=cats[0]?cats[0][1]:1;
+  const mesGastosTot=sum(mesList);
+  const plan=planTotales(c,gastos);
+  const totalIngresos=plan.totalIngresos;
+  const topCatName=cats[0]?cats[0][0]:'';
+  const topCatVal=cats[0]?cats[0][1]:0;
+  const topCatPct=totalIngresos>0?fmt((topCatVal/totalIngresos)*100,1):(mesGastosTot>0?fmt((topCatVal/mesGastosTot)*100,1):'0');
 
   // last 7 days bars
   const days=[];
@@ -464,24 +470,37 @@ async function R_stats(gastos,c){
   </div>
 
   <h3 class="text-sm font-semibold text-pink-200 mb-2">Por categoría (mes)</h3>
-  <p class="text-[10px] text-violet-300 mb-2">Toca una categoría para ver el desglose</p>
+  <p class="text-[10px] text-violet-300 mb-2">% sobre tu ingreso del mes · toca para desglose</p>
+  ${cats.length && topCatName?`<div class="card-pink p-3 mb-3 text-center">
+    <p class="text-[10px] text-pink-200 uppercase tracking-wide">Mayor gasto del mes</p>
+    <p class="text-base font-bold text-pink-100 mt-0.5">🔥 ${topCatName}</p>
+    <p class="amt text-sm text-pink-200">${sym} ${fmt(topCatVal)} · ${topCatPct}%</p>
+  </div>`:''}
   <div class="space-y-2" id="catList">
     ${cats.length===0?`<div class="empty glass text-sm">Sin datos este mes</div>`:
       cats.map(([name,val])=>{
         const safe=name.replace(/'/g,"\\'");
+        const pctIng=totalIngresos>0?((val/totalIngresos)*100):0;
+        const pctGastos=mesGastosTot>0?((val/mesGastosTot)*100):0;
+        const isTop=name===topCatName;
         return `
-      <div class="glass p-3" style="cursor:pointer" onclick="toggleCatDetail('${safe}')">
-        <div class="flex justify-between text-sm mb-1">
-          <span>${name}</span>
-          <span class="amt">${sym} ${fmt(val)} <span class="text-violet-300 text-[10px]">▼</span></span>
+      <div class="glass p-3 ${isTop?'border border-pink-400/60':''}" style="cursor:pointer${isTop?';box-shadow:0 0 12px rgba(249,168,212,.25)':''}" onclick="toggleCatDetail('${safe}')">
+        <div class="flex justify-between text-sm mb-0.5 items-start gap-2">
+          <span class="font-medium">${isTop?'🔥 ':''}${name}</span>
+          <span class="amt text-right whitespace-nowrap">${sym} ${fmt(val)} <span class="text-violet-300 text-[10px]">▼</span></span>
         </div>
-        <div class="h-2 rounded-full bg-violet-900/50 overflow-hidden">
-          <div class="h-full rounded-full" style="width:${(val/maxCat)*100}%;background:linear-gradient(90deg,#f9a8d4,#db2777)"></div>
+        <div class="flex justify-between text-[11px] text-pink-200/90 mb-1.5">
+          <span><b class="text-pink-100">${fmt(pctIng,1)}%</b> del ingreso</span>
+          <span class="text-violet-300">${fmt(pctGastos,0)}% de gastos</span>
+        </div>
+        <div class="h-2.5 rounded-full bg-violet-900/50 overflow-hidden">
+          <div class="h-full rounded-full" style="width:${Math.min(100,pctIng)}%;background:${isTop?'linear-gradient(90deg,#f472b6,#db2777)':'linear-gradient(90deg,#f9a8d4,#a78bfa)'}"></div>
         </div>
         <div id="cat-detail-${safe.replace(/[^a-zA-Z0-9]/g,'_')}" class="hidden mt-2 pt-2 border-t border-pink-300/20 space-y-1"></div>
       </div>`;
       }).join('')}
-  </div>`;
+  </div>
+  ${totalIngresos<=0?`<p class="text-[10px] text-amber-200/90 mt-2 text-center">Define tu ingreso en <b>Plan</b> para ver el % sobre ingresos</p>`:''}`;
 }
 
 
@@ -741,8 +760,14 @@ async function delGasto(id){
 
 <script>
 if('serviceWorker' in navigator){
-  window.addEventListener('load',()=>{
-    navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  window.addEventListener('load', async ()=>{
+    try{
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for(const r of regs){ await r.unregister(); }
+      const keys = await caches.keys();
+      for(const k of keys){ await caches.delete(k); }
+    }catch(e){}
+    navigator.serviceWorker.register('./sw.js?v=3').catch(()=>{});
   });
 }
 </script>
