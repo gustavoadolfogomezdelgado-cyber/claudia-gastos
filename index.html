@@ -103,6 +103,7 @@ tailwind.config={theme:{extend:{colors:{
 
 <main>
   <section id="s-home" class="screen on"></section>
+  <section id="s-plan" class="screen"></section>
   <section id="s-list" class="screen"></section>
   <section id="s-stats" class="screen"></section>
   <section id="s-cal" class="screen"></section>
@@ -112,6 +113,7 @@ tailwind.config={theme:{extend:{colors:{
 
 <nav class="nav-bar">
   <div class="nav-item on" data-s="home" onclick="go('home')"><span class="ico">🏠</span>Inicio</div>
+  <div class="nav-item" data-s="plan" onclick="go('plan')"><span class="ico">💰</span>Planificación</div>
   <div class="nav-item" data-s="list" onclick="go('list')"><span class="ico">📋</span>Gastos</div>
   <div class="nav-item" data-s="stats" onclick="go('stats')"><span class="ico">📊</span>Resumen</div>
   <div class="nav-item" data-s="cal" onclick="go('cal')"><span class="ico">📅</span>Calendario</div>
@@ -128,7 +130,10 @@ const STORES=['gastos','config'];
 let db;
 
 const DEF_CATS=['Comida 🍽️','Transporte 🚗','Hogar 🏠','Salud 💊','Belleza 💄','Ropa 👗','Ocio 🎬','Educación 📚','Servicios 📱','Otros ✨'];
-const DEF={nombre:'Claudia', moneda:'BOB', simbolo:'Bs', categorias:DEF_CATS};
+const DEF={nombre:'Claudia', moneda:'BOB', simbolo:'Bs', categorias:DEF_CATS,
+  ingresoMensual:0, otrosIngresos:0, ahorroMensual:0,
+  planMes:'' // YYYY-MM del mes de planificación
+};
 
 function openDB(){return new Promise((res,rej)=>{
   const r=indexedDB.open(DB,VER);
@@ -183,8 +188,31 @@ function go(name){
 async function render(name){
   const c=await cfg();
   const gastos=await all('gastos');
-  const map={home:()=>R_home(gastos,c),list:()=>R_list(gastos,c),stats:()=>R_stats(gastos,c),cal:()=>R_cal(gastos,c),cats:()=>R_cats(c),cfg:()=>R_cfg(c)};
+  const map={home:()=>R_home(gastos,c),plan:()=>R_plan(c,gastos),list:()=>R_list(gastos,c),stats:()=>R_stats(gastos,c),cal:()=>R_cal(gastos,c),cats:()=>R_cats(c),cfg:()=>R_cfg(c)};
   if(map[name])await map[name]();
+}
+
+
+function mesKey(d=new Date()){return localDateStr(d).slice(0,7)} // YYYY-MM
+function ensurePlanMes(c){
+  const m=mesKey();
+  if(c.planMes!==m){
+    // nuevo mes: no borramos ingresos guardados a menos que el usuario quiera; mantenemos valores
+    c.planMes=m;
+  }
+  return c;
+}
+function planTotales(c, gastos){
+  const monFrom=startOfMonth();
+  const t=today();
+  const monTo=endOfMonth();
+  const gastosMes=sum(byRange(gastos, monFrom, t <= monTo ? t : monTo));
+  const ingreso=parseFloat(c.ingresoMensual)||0;
+  const otros=parseFloat(c.otrosIngresos)||0;
+  const ahorro=parseFloat(c.ahorroMensual)||0;
+  const totalIngresos=ingreso+otros;
+  const disponible=totalIngresos-gastosMes-ahorro;
+  return{ingreso,otros,ahorro,totalIngresos,gastosMes,disponible};
 }
 
 function sum(list){return list.reduce((s,g)=>s+(parseFloat(g.monto)||0),0)}
@@ -198,15 +226,30 @@ async function R_home(gastos,c){
   const monFrom=startOfMonth();
   const monTo=endOfMonth();
   const hoy=sum(byDay(gastos,t));
-  const sem=sum(byRange(gastos,weekFrom, weekTo < t ? weekTo : t)); // semana en curso hasta hoy
-  const mes=sum(byRange(gastos,monFrom, monTo < t ? monTo : t)); // mes en curso hasta hoy
+  const sem=sum(byRange(gastos,weekFrom, weekTo < t ? weekTo : t));
+  const mes=sum(byRange(gastos,monFrom, monTo < t ? monTo : t));
   const hoyList=byDay(gastos,t).sort((a,b)=>(b.id||0)-(a.id||0));
   const sym=c.simbolo||'Bs';
+  const p=planTotales(c,gastos);
+  const dispCls=p.disponible>=0?'text-emerald-300':'text-red-300';
 
   $('#s-home').innerHTML=`
-  <div class="card-pink p-4 mb-4 text-center">
+  <div class="card-pink p-4 mb-3 text-center">
+    <p class="text-pink-200/80 text-xs mb-1">Disponible este mes</p>
+    <p class="text-3xl amt ${dispCls}">${sym} ${fmt(p.disponible)}</p>
+    <p class="text-[10px] text-violet-200 mt-1">Ingresos − gastos − ahorro</p>
+  </div>
+  <div class="glass p-3 mb-3 text-xs space-y-1">
+    <div class="flex justify-between"><span class="text-pink-200">Ingresos</span><span class="amt">${sym} ${fmt(p.totalIngresos)}</span></div>
+    <div class="flex justify-between"><span class="text-pink-200">Gastos del mes</span><span class="amt">− ${sym} ${fmt(p.gastosMes)}</span></div>
+    <div class="flex justify-between"><span class="text-pink-200">Ahorro planificado</span><span class="amt">− ${sym} ${fmt(p.ahorro)}</span></div>
+    <div class="border-t border-pink-300/20 pt-1 flex justify-between font-semibold">
+      <span>Queda</span><span class="amt ${dispCls}">${sym} ${fmt(p.disponible)}</span>
+    </div>
+  </div>
+  <div class="card-pink p-3 mb-3 text-center">
     <p class="text-pink-200/80 text-xs mb-1">Hoy · ${t.split('-').reverse().join('/')}</p>
-    <p class="text-3xl amt text-pink-100">${sym} ${fmt(hoy)}</p>
+    <p class="text-2xl amt text-pink-100">${sym} ${fmt(hoy)}</p>
     <p class="text-xs text-violet-200 mt-1">${hoyList.length} gasto${hoyList.length!==1?'s':''} hoy</p>
   </div>
   <div class="grid grid-cols-2 gap-3 mb-4">
@@ -242,6 +285,58 @@ function itemHTML(g,c){
       </div>
     </div>
   </div>`;
+}
+
+async function R_plan(c,gastos){
+  const sym=c.simbolo||'Bs';
+  const p=planTotales(c,gastos);
+  const dispCls=p.disponible>=0?'text-emerald-300':'text-red-300';
+  const mesLabel=mesKey().split('-').reverse().join('/'); // rough
+  const [yy,mm]=mesKey().split('-');
+  const nombres=['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const mesNombre=nombres[parseInt(mm,10)]+' '+yy;
+
+  $('#s-plan').innerHTML=`
+  <h2 class="font-semibold text-pink-100 mb-1">Planificación</h2>
+  <p class="text-xs text-violet-200 mb-3">${mesNombre} · define ingresos y ahorro</p>
+
+  <div class="glass p-4 space-y-3 mb-4">
+    <div>
+      <label class="lab">Ingreso mensual</label>
+      <input class="inp" type="number" step="any" id="p-ingreso" value="${c.ingresoMensual||''}" placeholder="0.00" inputmode="decimal">
+    </div>
+    <div>
+      <label class="lab">Otros ingresos del mes</label>
+      <input class="inp" type="number" step="any" id="p-otros" value="${c.otrosIngresos||''}" placeholder="0.00" inputmode="decimal">
+      <p class="text-[10px] text-violet-300 mt-1">Bonos, extras, regalos, etc.</p>
+    </div>
+    <div>
+      <label class="lab">Monto a ahorro</label>
+      <input class="inp" type="number" step="any" id="p-ahorro" value="${c.ahorroMensual||''}" placeholder="0.00" inputmode="decimal">
+      <p class="text-[10px] text-violet-300 mt-1">Lo que quieres apartar este mes</p>
+    </div>
+    <button class="btn-main" onclick="savePlan()">Guardar planificación 💕</button>
+  </div>
+
+  <div class="card-pink p-4 space-y-2 text-sm">
+    <div class="flex justify-between"><span class="text-pink-200">Total ingresos</span><span class="amt">${sym} ${fmt(p.totalIngresos)}</span></div>
+    <div class="flex justify-between"><span class="text-pink-200">Gastos del mes</span><span class="amt">− ${sym} ${fmt(p.gastosMes)}</span></div>
+    <div class="flex justify-between"><span class="text-pink-200">Ahorro</span><span class="amt">− ${sym} ${fmt(p.ahorro)}</span></div>
+    <div class="border-t border-pink-300/30 pt-2 flex justify-between font-bold text-base">
+      <span>Disponible</span><span class="amt ${dispCls}">${sym} ${fmt(p.disponible)}</span>
+    </div>
+  </div>
+  <p class="text-[10px] text-center text-violet-300 mt-3">El disponible también se muestra en Inicio</p>`;
+}
+async function savePlan(){
+  const c=await cfg();
+  c.ingresoMensual=parseFloat($('#p-ingreso').value)||0;
+  c.otrosIngresos=parseFloat($('#p-otros').value)||0;
+  c.ahorroMensual=parseFloat($('#p-ahorro').value)||0;
+  c.planMes=mesKey();
+  await saveCfg(c);
+  toast('Planificación guardada ✨');
+  go('plan');
 }
 
 async function R_list(gastos,c){
@@ -364,16 +459,60 @@ async function R_stats(gastos,c){
   </div>
 
   <h3 class="text-sm font-semibold text-pink-200 mb-2">Por categoría (mes)</h3>
-  <div class="space-y-2">
+  <p class="text-[10px] text-violet-300 mb-2">Toca una categoría para ver el desglose</p>
+  <div class="space-y-2" id="catList">
     ${cats.length===0?`<div class="empty glass text-sm">Sin datos este mes</div>`:
-      cats.map(([name,val])=>`
-      <div class="glass p-3">
-        <div class="flex justify-between text-sm mb-1"><span>${name}</span><span class="amt">${sym} ${fmt(val)}</span></div>
+      cats.map(([name,val])=>{
+        const safe=name.replace(/'/g,"\\'");
+        return `
+      <div class="glass p-3" style="cursor:pointer" onclick="toggleCatDetail('${safe}')">
+        <div class="flex justify-between text-sm mb-1">
+          <span>${name}</span>
+          <span class="amt">${sym} ${fmt(val)} <span class="text-violet-300 text-[10px]">▼</span></span>
+        </div>
         <div class="h-2 rounded-full bg-violet-900/50 overflow-hidden">
           <div class="h-full rounded-full" style="width:${(val/maxCat)*100}%;background:linear-gradient(90deg,#f9a8d4,#db2777)"></div>
         </div>
-      </div>`).join('')}
+        <div id="cat-detail-${safe.replace(/[^a-zA-Z0-9]/g,'_')}" class="hidden mt-2 pt-2 border-t border-pink-300/20 space-y-1"></div>
+      </div>`;
+      }).join('')}
   </div>`;
+}
+
+
+async function toggleCatDetail(catName){
+  const id='cat-detail-'+catName.replace(/[^a-zA-Z0-9]/g,'_');
+  const el=document.getElementById(id);
+  if(!el)return;
+  if(!el.classList.contains('hidden') && el.dataset.loaded==='1'){
+    el.classList.add('hidden');
+    return;
+  }
+  const c=await cfg();
+  const gastos=await all('gastos');
+  const sym=c.simbolo||'Bs';
+  const monFrom=startOfMonth();
+  const t=today();
+  const monTo=endOfMonth();
+  const mesList=byRange(gastos, monFrom, t<=monTo?t:monTo)
+    .filter(g=>(g.categoria||'Otros ✨')===catName)
+    .sort((a,b)=>(b.fecha||'').localeCompare(a.fecha||'') || (b.id||0)-(a.id||0));
+  const tot=sum(mesList);
+  if(mesList.length===0){
+    el.innerHTML='<p class="text-xs text-violet-300">Sin gastos en esta categoría</p>';
+  } else {
+    el.innerHTML=mesList.map(g=>`
+      <div class="flex justify-between gap-2 text-xs py-1.5 border-b border-violet-800/40 last:border-0">
+        <div class="min-w-0">
+          <div class="text-pink-100 font-medium truncate">${g.descripcion||g.categoria||'Gasto'}</div>
+          <div class="text-violet-300">${(g.fecha||'').split('-').reverse().join('/')}${g.hora?' · '+g.hora:''}</div>
+        </div>
+        <div class="amt text-pink-100 whitespace-nowrap">${sym} ${fmt(g.monto)}</div>
+      </div>
+    `).join('') + `<div class="flex justify-between text-xs font-semibold pt-1 text-pink-200"><span>Total</span><span class="amt">${sym} ${fmt(tot)}</span></div>`;
+  }
+  el.dataset.loaded='1';
+  el.classList.remove('hidden');
 }
 
 async function R_cal(gastos,c){
