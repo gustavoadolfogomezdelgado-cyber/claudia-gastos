@@ -136,7 +136,7 @@ let db;
 
 const DEF_CATS=['Comida 🍽️','Transporte 🚗','Hogar 🏠','Salud 💊','Belleza 💄','Ropa 👗','Ocio 🎬','Educación 📚','Servicios 📱','Otros ✨'];
 const DEF={nombre:'Claudia', moneda:'BOB', simbolo:'Bs', categorias:DEF_CATS,
-  ingresoMensual:0, otrosIngresos:0, otrosIngresosDesc:'',
+  ingresoMensual:0, otrosIngresos:0, otrosIngresosList:[],
   ahorroMensual:0, planMes:'',
   saldoAnterior:0,      // saldo que sobró del mes pasado
   ahorroAcumulado:0     // total de ahorro que se ha ido guardando
@@ -215,8 +215,6 @@ async function ensurePlanMes(c, gastos){
   const m=mesKey();
   if(c.planMes && c.planMes !== m){
     // === Cierre del mes anterior ===
-    // Usamos los valores actuales de planificación (asumiendo que no se cambiaron a mitad de mes)
-    // para calcular cuánto sobró y mover el ahorro al acumulado.
     const prev = prevMonthRange();
     const gastosPrev = sum(byRange(gastos, prev.from, prev.to));
     const ingreso = parseFloat(c.ingresoMensual)||0;
@@ -226,8 +224,14 @@ async function ensurePlanMes(c, gastos){
 
     // El saldo que sobró del mes pasado se acumula
     c.saldoAnterior = Math.max(0, (parseFloat(c.saldoAnterior)||0) + prevDisponible);
-    // El ahorro del mes pasado se suma al acumulado
+    // El ahorro del mes pasado se suma al acumulado permanente
     c.ahorroAcumulado = (parseFloat(c.ahorroAcumulado)||0) + ahorro;
+
+    // Resetear campos del mes nuevo
+    c.otrosIngresos = 0;
+    c.otrosIngresosList = [];
+    c.ahorroMensual = 0;   // el usuario vuelve a definir el ahorro del nuevo mes
+    // ingresoMensual se mantiene (suele ser el mismo)
 
     c.planMes = m;
     await saveCfg(c);
@@ -276,7 +280,8 @@ async function R_home(gastos,c){
   const sym=c.simbolo||'Bs';
   const p=planTotales(c,gastos);
   const dispCls=p.disponible>=0?'text-emerald-300':'text-red-300';
-  const ahorroAcum = parseFloat(c.ahorroAcumulado)||0;
+  // Incluye el ahorro planificado de este mes para que se vea de inmediato
+  const ahorroAcum = (parseFloat(c.ahorroAcumulado)||0) + (parseFloat(c.ahorroMensual)||0);
   const tieneSaldoAnt = p.saldoAnterior > 0;
 
   // Nombre del mes anterior para el desglose
@@ -373,8 +378,22 @@ async function R_plan(c,gastos){
   const [yy,mm]=mesKey().split('-');
   const nombres=['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   const mesNombre=nombres[parseInt(mm,10)]+' '+yy;
-  const ahorroAcum = parseFloat(c.ahorroAcumulado)||0;
+  // Ahorro que se ve = acumulado de meses anteriores + lo planificado este mes
+  const ahorroAcum = (parseFloat(c.ahorroAcumulado)||0) + (parseFloat(c.ahorroMensual)||0);
   const tieneSaldoAnt = p.saldoAnterior > 0;
+  const listaOtros = Array.isArray(c.otrosIngresosList) ? c.otrosIngresosList : [];
+
+  // Lista de ingresos extras ya cargados este mes
+  const listaHTML = listaOtros.length === 0
+    ? `<p class="text-[11px] text-violet-300/70">Aún no agregaste ingresos extras</p>`
+    : listaOtros.map((item, idx) => `
+      <div class="flex justify-between items-center text-xs py-1 border-b border-pink-300/10 last:border-0">
+        <span class="text-violet-200 truncate pr-2">${item.desc || 'Sin descripción'}</span>
+        <div class="flex items-center gap-2 shrink-0">
+          <span class="amt text-emerald-300">+ ${sym} ${fmt(item.monto)}</span>
+          <button class="btn-ghost" style="padding:1px 6px;font-size:10px" onclick="quitarOtroIngreso(${idx})">✕</button>
+        </div>
+      </div>`).join('');
 
   $('#s-plan').innerHTML=`
   <h2 class="font-semibold text-pink-100 mb-1">Planificación</h2>
@@ -385,15 +404,24 @@ async function R_plan(c,gastos){
       <label class="lab">Ingreso mensual</label>
       <input class="inp" type="number" step="any" id="p-ingreso" value="${c.ingresoMensual||''}" placeholder="0.00" inputmode="decimal">
     </div>
-    <div>
+
+    <!-- Otros ingresos: se agregan uno por uno -->
+    <div class="border border-pink-300/20 rounded-xl p-3 space-y-2">
       <label class="lab">Otros ingresos del mes</label>
-      <input class="inp" type="number" step="any" id="p-otros" value="${c.otrosIngresos||''}" placeholder="0.00" inputmode="decimal">
+      <p class="text-[10px] text-violet-300 -mt-1 mb-1">Cada vez que agregues uno se guarda y la casilla queda lista para el siguiente</p>
+      <input class="inp" type="number" step="any" id="p-otros" value="" placeholder="Monto (ej: 50)" inputmode="decimal">
+      <input class="inp" type="text" id="p-otros-desc" value="" placeholder="¿De qué es? (ej: Bono, regalo…)">
+      <button class="btn-ghost w-full" style="padding:.55rem" onclick="agregarOtroIngreso()">＋ Agregar este ingreso</button>
+
+      <div class="mt-2 pt-2 border-t border-pink-300/15">
+        <div class="flex justify-between text-xs mb-1">
+          <span class="text-pink-200 font-semibold">Ya agregados este mes</span>
+          <span class="amt text-emerald-300">${sym} ${fmt(p.otros)}</span>
+        </div>
+        ${listaHTML}
+      </div>
     </div>
-    <div>
-      <label class="lab">¿De qué es este ingreso?</label>
-      <input class="inp" type="text" id="p-otros-desc" value="${(c.otrosIngresosDesc||'').replace(/"/g,'&quot;')}" placeholder="Ej: Bono, regalo, freelance…">
-      <p class="text-[10px] text-violet-300 mt-1">Describe de dónde viene el dinero extra</p>
-    </div>
+
     <div>
       <label class="lab">Monto a ahorro</label>
       <input class="inp" type="number" step="any" id="p-ahorro" value="${c.ahorroMensual||''}" placeholder="0.00" inputmode="decimal">
@@ -404,8 +432,9 @@ async function R_plan(c,gastos){
 
   <div class="card-pink p-4 space-y-2 text-sm">
     ${tieneSaldoAnt ? `<div class="flex justify-between"><span class="text-pink-200">Saldo mes anterior</span><span class="amt text-emerald-300">+ ${sym} ${fmt(p.saldoAnterior)}</span></div>` : ''}
-    <div class="flex justify-between"><span class="text-pink-200">Total ingresos</span><span class="amt">${sym} ${fmt(p.totalIngresos)}</span></div>
-    ${c.otrosIngresosDesc && p.otros>0 ? `<div class="flex justify-between text-xs"><span class="text-violet-300 pl-2">↳ ${c.otrosIngresosDesc}</span><span class="amt text-violet-200">${sym} ${fmt(p.otros)}</span></div>` : ''}
+    <div class="flex justify-between"><span class="text-pink-200">Ingreso mensual</span><span class="amt">${sym} ${fmt(p.ingreso)}</span></div>
+    <div class="flex justify-between"><span class="text-pink-200">Otros ingresos</span><span class="amt">${sym} ${fmt(p.otros)}</span></div>
+    <div class="flex justify-between"><span class="text-pink-200">Total ingresos</span><span class="amt font-semibold">${sym} ${fmt(p.totalIngresos)}</span></div>
     <div class="flex justify-between"><span class="text-pink-200">Gastos del mes</span><span class="amt">− ${sym} ${fmt(p.gastosMes)}</span></div>
     <div class="flex justify-between"><span class="text-pink-200">Ahorro del mes</span><span class="amt">− ${sym} ${fmt(p.ahorro)}</span></div>
     <div class="border-t border-pink-300/30 pt-2 flex justify-between font-bold text-base">
@@ -417,16 +446,49 @@ async function R_plan(c,gastos){
     <div>
       <p class="text-[10px] text-pink-300 uppercase tracking-wide">Ahorro acumulado total</p>
       <p class="text-lg amt text-emerald-300 mt-0.5">${sym} ${fmt(ahorroAcum)}</p>
+      <p class="text-[10px] text-violet-300 mt-0.5">Incluye el ahorro de este mes</p>
     </div>
     <div class="text-2xl">🐷</div>
   </div>
   <p class="text-[10px] text-center text-violet-300 mt-3">El disponible y el ahorro también se muestran en Inicio</p>`;
 }
+
+async function agregarOtroIngreso(){
+  const monto = parseFloat($('#p-otros').value);
+  const desc  = ($('#p-otros-desc').value||'').trim();
+  if(!monto || monto <= 0){
+    toast('Escribe un monto válido');
+    return;
+  }
+  const c = await cfg();
+  if(!Array.isArray(c.otrosIngresosList)) c.otrosIngresosList = [];
+  c.otrosIngresosList.push({
+    monto: monto,
+    desc: desc || 'Ingreso extra',
+    fecha: today()
+  });
+  // Recalcular total
+  c.otrosIngresos = c.otrosIngresosList.reduce((s,i)=>s+(parseFloat(i.monto)||0),0);
+  c.planMes = mesKey();
+  await saveCfg(c);
+  toast('Ingreso agregado ✨');
+  go('plan'); // re-render, campos quedan en blanco
+}
+
+async function quitarOtroIngreso(idx){
+  const c = await cfg();
+  if(!Array.isArray(c.otrosIngresosList)) return;
+  c.otrosIngresosList.splice(idx, 1);
+  c.otrosIngresos = c.otrosIngresosList.reduce((s,i)=>s+(parseFloat(i.monto)||0),0);
+  await saveCfg(c);
+  toast('Ingreso eliminado');
+  go('plan');
+}
+
 async function savePlan(){
   const c=await cfg();
   c.ingresoMensual=parseFloat($('#p-ingreso').value)||0;
-  c.otrosIngresos=parseFloat($('#p-otros').value)||0;
-  c.otrosIngresosDesc=($('#p-otros-desc').value||'').trim();
+  // otrosIngresos se maneja con agregarOtroIngreso / quitarOtroIngreso
   c.ahorroMensual=parseFloat($('#p-ahorro').value)||0;
   c.planMes=mesKey();
   await saveCfg(c);
