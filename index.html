@@ -136,8 +136,10 @@ let db;
 
 const DEF_CATS=['Comida 🍽️','Transporte 🚗','Hogar 🏠','Salud 💊','Belleza 💄','Ropa 👗','Ocio 🎬','Educación 📚','Servicios 📱','Otros ✨'];
 const DEF={nombre:'Claudia', moneda:'BOB', simbolo:'Bs', categorias:DEF_CATS,
-  ingresoMensual:0, otrosIngresos:0, ahorroMensual:0,
-  planMes:'' // YYYY-MM del mes de planificación
+  ingresoMensual:0, otrosIngresos:0, otrosIngresosDesc:'',
+  ahorroMensual:0, planMes:'',
+  saldoAnterior:0,      // saldo que sobró del mes pasado
+  ahorroAcumulado:0     // total de ahorro que se ha ido guardando
 };
 
 function openDB(){return new Promise((res,rej)=>{
@@ -191,22 +193,50 @@ function go(name){
 }
 
 async function render(name){
-  const c=await cfg();
+  let c=await cfg();
   const gastos=await all('gastos');
+  c = await ensurePlanMes(c, gastos); // aplica cierre de mes si corresponde
   const map={home:()=>R_home(gastos,c),plan:()=>R_plan(c,gastos),list:()=>R_list(gastos,c),stats:()=>R_stats(gastos,c),cal:()=>R_cal(gastos,c),cats:()=>R_cats(c),cfg:()=>R_cfg(c)};
   if(map[name])await map[name]();
 }
 
 
 function mesKey(d=new Date()){return localDateStr(d).slice(0,7)} // YYYY-MM
-function ensurePlanMes(c){
+
+function prevMonthRange(d=new Date()){
+  // Devuelve {from, to, key} del mes anterior
+  const x=new Date(d.getFullYear(), d.getMonth()-1, 1);
+  const from=localDateStr(x);
+  const to=localDateStr(new Date(x.getFullYear(), x.getMonth()+1, 0));
+  return {from, to, key:from.slice(0,7)};
+}
+
+async function ensurePlanMes(c, gastos){
   const m=mesKey();
-  if(c.planMes!==m){
-    // nuevo mes: no borramos ingresos guardados a menos que el usuario quiera; mantenemos valores
-    c.planMes=m;
+  if(c.planMes && c.planMes !== m){
+    // === Cierre del mes anterior ===
+    // Usamos los valores actuales de planificación (asumiendo que no se cambiaron a mitad de mes)
+    // para calcular cuánto sobró y mover el ahorro al acumulado.
+    const prev = prevMonthRange();
+    const gastosPrev = sum(byRange(gastos, prev.from, prev.to));
+    const ingreso = parseFloat(c.ingresoMensual)||0;
+    const otros   = parseFloat(c.otrosIngresos)||0;
+    const ahorro  = parseFloat(c.ahorroMensual)||0;
+    const prevDisponible = ingreso + otros - gastosPrev - ahorro;
+
+    // El saldo que sobró del mes pasado se acumula
+    c.saldoAnterior = Math.max(0, (parseFloat(c.saldoAnterior)||0) + prevDisponible);
+    // El ahorro del mes pasado se suma al acumulado
+    c.ahorroAcumulado = (parseFloat(c.ahorroAcumulado)||0) + ahorro;
+
+    c.planMes = m;
+    await saveCfg(c);
+  } else if(!c.planMes){
+    c.planMes = m;
   }
   return c;
 }
+
 function planTotales(c, gastos){
   const monFrom=startOfMonth();
   const t=today();
@@ -215,9 +245,18 @@ function planTotales(c, gastos){
   const ingreso=parseFloat(c.ingresoMensual)||0;
   const otros=parseFloat(c.otrosIngresos)||0;
   const ahorro=parseFloat(c.ahorroMensual)||0;
+  const saldoAnt=parseFloat(c.saldoAnterior)||0;
   const totalIngresos=ingreso+otros;
-  const disponible=totalIngresos-gastosMes-ahorro;
-  return{ingreso,otros,ahorro,totalIngresos,gastosMes,disponible};
+  // Disponible del mes actual (sin saldo anterior)
+  const disponibleMes = totalIngresos - gastosMes - ahorro;
+  // Disponible total = saldo anterior + disponible de este mes
+  const disponible = saldoAnt + disponibleMes;
+  return{
+    ingreso, otros, ahorro, totalIngresos, gastosMes,
+    saldoAnterior: saldoAnt,
+    disponibleMes,
+    disponible
+  };
 }
 
 function sum(list){return list.reduce((s,g)=>s+(parseFloat(g.monto)||0),0)}
@@ -237,13 +276,38 @@ async function R_home(gastos,c){
   const sym=c.simbolo||'Bs';
   const p=planTotales(c,gastos);
   const dispCls=p.disponible>=0?'text-emerald-300':'text-red-300';
+  const ahorroAcum = parseFloat(c.ahorroAcumulado)||0;
+  const tieneSaldoAnt = p.saldoAnterior > 0;
+
+  // Nombre del mes anterior para el desglose
+  const prev = prevMonthRange();
+  const [pyy,pmm] = prev.key.split('-');
+  const nombres=['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const mesAntNombre = nombres[parseInt(pmm,10)] + ' ' + pyy;
 
   $('#s-home').innerHTML=`
   <div class="card-pink p-4 mb-3 text-center">
     <p class="text-pink-200/80 text-xs mb-1">Disponible este mes</p>
     <p class="text-3xl amt ${dispCls}">${sym} ${fmt(p.disponible)}</p>
-    <p class="text-[10px] text-violet-200 mt-1">Ingresos − gastos − ahorro</p>
+    <p class="text-[10px] text-violet-200 mt-1">${tieneSaldoAnt ? 'Incluye saldo del mes anterior' : 'Ingresos − gastos − ahorro'}</p>
   </div>
+
+  ${tieneSaldoAnt ? `
+  <div class="glass p-3 mb-3 text-xs space-y-1.5">
+    <p class="text-pink-200 font-semibold mb-1">Desglose del disponible</p>
+    <div class="flex justify-between">
+      <span class="text-violet-200">Saldo de ${mesAntNombre}</span>
+      <span class="amt text-emerald-300">+ ${sym} ${fmt(p.saldoAnterior)}</span>
+    </div>
+    <div class="flex justify-between">
+      <span class="text-violet-200">Disponible de este mes</span>
+      <span class="amt ${p.disponibleMes>=0?'text-emerald-300':'text-red-300'}">${sym} ${fmt(p.disponibleMes)}</span>
+    </div>
+    <div class="border-t border-pink-300/20 pt-1.5 flex justify-between font-semibold">
+      <span>Total disponible</span>
+      <span class="amt ${dispCls}">${sym} ${fmt(p.disponible)}</span>
+    </div>
+  </div>` : `
   <div class="glass p-3 mb-3 text-xs space-y-1">
     <div class="flex justify-between"><span class="text-pink-200">Ingresos</span><span class="amt">${sym} ${fmt(p.totalIngresos)}</span></div>
     <div class="flex justify-between"><span class="text-pink-200">Gastos del mes</span><span class="amt">− ${sym} ${fmt(p.gastosMes)}</span></div>
@@ -251,7 +315,17 @@ async function R_home(gastos,c){
     <div class="border-t border-pink-300/20 pt-1 flex justify-between font-semibold">
       <span>Queda</span><span class="amt ${dispCls}">${sym} ${fmt(p.disponible)}</span>
     </div>
+  </div>`}
+
+  <!-- Ahorro acumulado -->
+  <div class="glass p-3 mb-3 flex items-center justify-between">
+    <div>
+      <p class="text-[10px] text-pink-300 uppercase tracking-wide">Ahorro acumulado</p>
+      <p class="text-lg amt text-emerald-300 mt-0.5">${sym} ${fmt(ahorroAcum)}</p>
+    </div>
+    <div class="text-2xl">🐷</div>
   </div>
+
   <div class="card-pink p-3 mb-3 text-center">
     <p class="text-pink-200/80 text-xs mb-1">Hoy · ${t.split('-').reverse().join('/')}</p>
     <p class="text-2xl amt text-pink-100">${sym} ${fmt(hoy)}</p>
@@ -296,10 +370,11 @@ async function R_plan(c,gastos){
   const sym=c.simbolo||'Bs';
   const p=planTotales(c,gastos);
   const dispCls=p.disponible>=0?'text-emerald-300':'text-red-300';
-  const mesLabel=mesKey().split('-').reverse().join('/'); // rough
   const [yy,mm]=mesKey().split('-');
   const nombres=['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   const mesNombre=nombres[parseInt(mm,10)]+' '+yy;
+  const ahorroAcum = parseFloat(c.ahorroAcumulado)||0;
+  const tieneSaldoAnt = p.saldoAnterior > 0;
 
   $('#s-plan').innerHTML=`
   <h2 class="font-semibold text-pink-100 mb-1">Planificación</h2>
@@ -313,7 +388,11 @@ async function R_plan(c,gastos){
     <div>
       <label class="lab">Otros ingresos del mes</label>
       <input class="inp" type="number" step="any" id="p-otros" value="${c.otrosIngresos||''}" placeholder="0.00" inputmode="decimal">
-      <p class="text-[10px] text-violet-300 mt-1">Bonos, extras, regalos, etc.</p>
+    </div>
+    <div>
+      <label class="lab">¿De qué es este ingreso?</label>
+      <input class="inp" type="text" id="p-otros-desc" value="${(c.otrosIngresosDesc||'').replace(/"/g,'&quot;')}" placeholder="Ej: Bono, regalo, freelance…">
+      <p class="text-[10px] text-violet-300 mt-1">Describe de dónde viene el dinero extra</p>
     </div>
     <div>
       <label class="lab">Monto a ahorro</label>
@@ -324,19 +403,30 @@ async function R_plan(c,gastos){
   </div>
 
   <div class="card-pink p-4 space-y-2 text-sm">
+    ${tieneSaldoAnt ? `<div class="flex justify-between"><span class="text-pink-200">Saldo mes anterior</span><span class="amt text-emerald-300">+ ${sym} ${fmt(p.saldoAnterior)}</span></div>` : ''}
     <div class="flex justify-between"><span class="text-pink-200">Total ingresos</span><span class="amt">${sym} ${fmt(p.totalIngresos)}</span></div>
+    ${c.otrosIngresosDesc && p.otros>0 ? `<div class="flex justify-between text-xs"><span class="text-violet-300 pl-2">↳ ${c.otrosIngresosDesc}</span><span class="amt text-violet-200">${sym} ${fmt(p.otros)}</span></div>` : ''}
     <div class="flex justify-between"><span class="text-pink-200">Gastos del mes</span><span class="amt">− ${sym} ${fmt(p.gastosMes)}</span></div>
-    <div class="flex justify-between"><span class="text-pink-200">Ahorro</span><span class="amt">− ${sym} ${fmt(p.ahorro)}</span></div>
+    <div class="flex justify-between"><span class="text-pink-200">Ahorro del mes</span><span class="amt">− ${sym} ${fmt(p.ahorro)}</span></div>
     <div class="border-t border-pink-300/30 pt-2 flex justify-between font-bold text-base">
       <span>Disponible</span><span class="amt ${dispCls}">${sym} ${fmt(p.disponible)}</span>
     </div>
   </div>
-  <p class="text-[10px] text-center text-violet-300 mt-3">El disponible también se muestra en Inicio</p>`;
+
+  <div class="glass p-3 mt-3 flex items-center justify-between">
+    <div>
+      <p class="text-[10px] text-pink-300 uppercase tracking-wide">Ahorro acumulado total</p>
+      <p class="text-lg amt text-emerald-300 mt-0.5">${sym} ${fmt(ahorroAcum)}</p>
+    </div>
+    <div class="text-2xl">🐷</div>
+  </div>
+  <p class="text-[10px] text-center text-violet-300 mt-3">El disponible y el ahorro también se muestran en Inicio</p>`;
 }
 async function savePlan(){
   const c=await cfg();
   c.ingresoMensual=parseFloat($('#p-ingreso').value)||0;
   c.otrosIngresos=parseFloat($('#p-otros').value)||0;
+  c.otrosIngresosDesc=($('#p-otros-desc').value||'').trim();
   c.ahorroMensual=parseFloat($('#p-ahorro').value)||0;
   c.planMes=mesKey();
   await saveCfg(c);
