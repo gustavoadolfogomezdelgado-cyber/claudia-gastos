@@ -419,17 +419,21 @@ async function R_plan(c,gastos){
         </div>
       </div>`).join('');
 
-  // Desglose del historial de ahorro (meses anteriores + este mes)
+  // Desglose del historial de ahorro (meses anteriores + este mes) con botón eliminar
   let desgloseAhorro = '';
   if(historial.length || ahorroEsteMes > 0){
     const items = [...historial].sort((a,b)=>b.mes.localeCompare(a.mes));
     if(ahorroEsteMes > 0){
-      items.unshift({ mes: mesKey(), monto: ahorroEsteMes, nombre: mesNombre + ' (actual)' });
+      items.unshift({ mes: mesKey(), monto: ahorroEsteMes, nombre: mesNombre + ' (actual)', esActual: true });
     }
     desgloseAhorro = items.map(h => `
-      <div class="flex justify-between text-xs py-1 border-b border-pink-300/10 last:border-0">
+      <div class="flex justify-between items-center text-xs py-1.5 border-b border-pink-300/10 last:border-0">
         <span class="text-violet-200">${h.nombre || h.mes}</span>
-        <span class="amt text-emerald-300">${sym} ${fmt(h.monto)}</span>
+        <div class="flex items-center gap-2 shrink-0">
+          <span class="amt text-emerald-300">${sym} ${fmt(h.monto)}</span>
+          <button class="btn-ghost" style="padding:1px 7px;font-size:11px"
+            onclick="event.stopPropagation(); eliminarAhorroMes('${h.mes}', ${h.esActual ? 'true' : 'false'})">✕</button>
+        </div>
       </div>`).join('');
   } else {
     desgloseAhorro = `<p class="text-[11px] text-violet-300/70">Todavía no hay ahorros registrados</p>`;
@@ -471,34 +475,34 @@ async function R_plan(c,gastos){
     <button class="btn-main" onclick="savePlan()">Guardar planificación 💕</button>
   </div>
 
-  <!-- Resumen descriptivo -->
+  <!-- Resumen descriptivo (orden pedido) -->
   <div class="card-pink p-4 space-y-2 text-sm">
-    ${tieneSaldoAnt ? `
-    <div class="flex justify-between">
-      <span class="text-pink-200">Saldo mes de ${mesAntNombre}</span>
-      <span class="amt text-emerald-300">+ ${sym} ${fmt(p.saldoAnterior)}</span>
-    </div>` : ''}
-    <div class="flex justify-between"><span class="text-pink-200">Ingreso mensual</span><span class="amt">${sym} ${fmt(p.ingreso)}</span></div>
+    <div class="flex justify-between"><span class="text-pink-200">Ingreso mensual actual</span><span class="amt">${sym} ${fmt(p.ingreso)}</span></div>
     <div class="flex justify-between"><span class="text-pink-200">Otros ingresos</span><span class="amt">${sym} ${fmt(p.otros)}</span></div>
     <div class="flex justify-between"><span class="text-pink-200">Total ingresos</span><span class="amt font-semibold">${sym} ${fmt(p.totalIngresos)}</span></div>
-    <div class="flex justify-between"><span class="text-pink-200">Gastos del mes</span><span class="amt">− ${sym} ${fmt(p.gastosMes)}</span></div>
+    <div class="flex justify-between">
+      <span class="text-pink-200">Saldo del mes anterior${tieneSaldoAnt ? ` (${mesAntNombre})` : ''}</span>
+      <span class="amt ${tieneSaldoAnt ? 'text-emerald-300' : ''}">${tieneSaldoAnt ? '+ ' : ''}${sym} ${fmt(p.saldoAnterior)}</span>
+    </div>
+    <div class="flex justify-between"><span class="text-pink-200">Gastos del mes actual</span><span class="amt">− ${sym} ${fmt(p.gastosMes)}</span></div>
     <div class="flex justify-between"><span class="text-pink-200">Ahorro del mes</span><span class="amt">− ${sym} ${fmt(p.ahorro)}</span></div>
     <div class="border-t border-pink-300/30 pt-2 flex justify-between font-bold text-base">
       <span>Disponible</span><span class="amt ${dispCls}">${sym} ${fmt(p.disponible)}</span>
     </div>
   </div>
 
-  <!-- Ahorro acumulado (tocable para ver desglose) -->
-  <div class="glass p-3 mt-3" onclick="toggleDesgloseAhorro()" style="cursor:pointer">
-    <div class="flex items-center justify-between">
+  <!-- Ahorro acumulado (clic en cerdito o en el recuadro para desglose) -->
+  <div class="glass p-3 mt-3" style="cursor:pointer">
+    <div class="flex items-center justify-between" onclick="toggleDesgloseAhorro()">
       <div>
         <p class="text-[10px] text-pink-300 uppercase tracking-wide">Ahorro acumulado total</p>
         <p class="text-lg amt text-emerald-300 mt-0.5">${sym} ${fmt(ahorroAcum)}</p>
-        <p class="text-[10px] text-violet-300 mt-0.5">Toca para ver desglose por mes</p>
+        <p class="text-[10px] text-violet-300 mt-0.5">Toca el cerdito para ver desglose por mes</p>
       </div>
-      <div class="text-2xl">🐷</div>
+      <div class="text-2xl" onclick="event.stopPropagation(); toggleDesgloseAhorro()">🐷</div>
     </div>
     <div id="desglose-ahorro" class="hidden mt-3 pt-2 border-t border-pink-300/20">
+      <p class="text-[10px] text-pink-200 mb-2">Puedes eliminar el ahorro de un mes si necesitas usarlo</p>
       ${desgloseAhorro}
     </div>
   </div>
@@ -508,6 +512,27 @@ async function R_plan(c,gastos){
 function toggleDesgloseAhorro(){
   const el = document.getElementById('desglose-ahorro');
   if(el) el.classList.toggle('hidden');
+}
+
+async function eliminarAhorroMes(mesKeyStr, esActual){
+  if(!confirm('¿Eliminar el ahorro de este mes? El dinero volverá a estar disponible.')) return;
+  const c = await cfg();
+  if(esActual === true || esActual === 'true'){
+    // Quitar el ahorro del mes actual
+    c.ahorroMensual = 0;
+  } else {
+    // Quitar del historial y restar del acumulado
+    if(!Array.isArray(c.ahorroHistorial)) c.ahorroHistorial = [];
+    const idx = c.ahorroHistorial.findIndex(h => h.mes === mesKeyStr);
+    if(idx >= 0){
+      const monto = parseFloat(c.ahorroHistorial[idx].monto) || 0;
+      c.ahorroHistorial.splice(idx, 1);
+      c.ahorroAcumulado = Math.max(0, (parseFloat(c.ahorroAcumulado)||0) - monto);
+    }
+  }
+  await saveCfg(c);
+  toast('Ahorro eliminado');
+  go('plan');
 }
 
 async function agregarOtroIngreso(){
