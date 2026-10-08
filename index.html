@@ -450,7 +450,14 @@ async function R_plan(c,gastos){
     <div>
       <label class="lab">Ingreso mensual</label>
       <input class="inp" type="number" step="any" id="p-ingreso" value="" placeholder="0.00" inputmode="decimal">
-      ${p.ingreso > 0 ? `<p class="text-[10px] text-violet-300 mt-1">Actual guardado: ${sym} ${fmt(p.ingreso)}</p>` : ''}
+      ${p.ingreso > 0 ? `<p class="text-[10px] text-violet-300 mt-1">Actual guardado: ${sym} ${fmt(p.ingreso)}</p>
+      <button class="btn-ghost w-full mt-2" style="padding:.45rem;font-size:11px" onclick="moverIngresoASaldo()">↪ Este monto es saldo del mes anterior (${sym} ${fmt(p.ingreso)}) · pasarlo ahí</button>` : ''}
+    </div>
+
+    <div>
+      <label class="lab">Saldo del mes anterior${tieneSaldoAnt ? ` (${mesAntNombre})` : ''}</label>
+      <input class="inp" type="number" step="any" id="p-saldo" value="" placeholder="0.00" inputmode="decimal">
+      <p class="text-[10px] text-violet-300 mt-1">Lo que te sobró del mes pasado; se suma al disponible${tieneSaldoAnt ? ` · Actual: ${sym} ${fmt(p.saldoAnterior)}` : ''}</p>
     </div>
 
     <!-- Otros ingresos: se agregan uno por uno -->
@@ -572,11 +579,25 @@ async function quitarOtroIngreso(idx){
   go('plan');
 }
 
+async function moverIngresoASaldo(){
+  const c = await cfg();
+  const monto = parseFloat(c.ingresoMensual)||0;
+  if(monto <= 0) return;
+  if(!confirm('¿Pasar '+fmt(monto)+' de "Ingreso mensual" a "Saldo del mes anterior"? El ingreso mensual quedará en 0 y el saldo se sumará al disponible.')) return;
+  c.saldoAnterior = (parseFloat(c.saldoAnterior)||0) + monto;
+  c.ingresoMensual = 0;
+  c.planMes = mesKey();
+  await saveCfg(c);
+  toast('Pasado a saldo del mes anterior ✨');
+  go('plan');
+}
+
 async function savePlan(){
   const c = await cfg();
   const ingresoVal = $('#p-ingreso').value;
   const ahorroVal  = $('#p-ahorro').value;
   const otrosVal   = $('#p-otros').value;
+  const saldoVal   = $('#p-saldo').value;
   const otrosDesc  = ($('#p-otros-desc').value||'').trim();
 
   // Solo actualiza si el usuario escribió algo (si deja en blanco, mantiene el valor anterior)
@@ -585,6 +606,9 @@ async function savePlan(){
   }
   if(ahorroVal !== '' && ahorroVal != null){
     c.ahorroMensual = parseFloat(ahorroVal) || 0;
+  }
+  if(saldoVal !== '' && saldoVal != null){
+    c.saldoAnterior = Math.max(0, parseFloat(saldoVal) || 0);
   }
   // Si hay un monto escrito en "Otros ingresos", se agrega a la lista y se suma
   const montoOtro = parseFloat(otrosVal);
