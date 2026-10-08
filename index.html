@@ -139,7 +139,8 @@ const DEF={nombre:'Claudia', moneda:'BOB', simbolo:'Bs', categorias:DEF_CATS,
   ingresoMensual:0, otrosIngresos:0, otrosIngresosList:[],
   ahorroMensual:0, planMes:'',
   saldoAnterior:0,      // saldo que sobró del mes pasado
-  ahorroAcumulado:0     // total de ahorro que se ha ido guardando
+  ahorroAcumulado:0,    // total de ahorro que se ha ido guardando
+  ahorroHistorial:[]    // [{mes:'YYYY-MM', monto:n, nombre:'Septiembre 2026'}]
 };
 
 function openDB(){return new Promise((res,rej)=>{
@@ -224,14 +225,28 @@ async function ensurePlanMes(c, gastos){
 
     // El saldo que sobró del mes pasado se acumula
     c.saldoAnterior = Math.max(0, (parseFloat(c.saldoAnterior)||0) + prevDisponible);
-    // El ahorro del mes pasado se suma al acumulado permanente
-    c.ahorroAcumulado = (parseFloat(c.ahorroAcumulado)||0) + ahorro;
+
+    // Guardar el ahorro del mes en el historial y sumarlo al acumulado
+    if(ahorro > 0){
+      if(!Array.isArray(c.ahorroHistorial)) c.ahorroHistorial = [];
+      const [pyy,pmm] = (c.planMes || prev.key).split('-');
+      const nombres=['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+      const nombreMes = nombres[parseInt(pmm,10)] + ' ' + pyy;
+      // Evitar duplicar el mismo mes
+      const ya = c.ahorroHistorial.find(h => h.mes === c.planMes);
+      if(ya){
+        ya.monto = (parseFloat(ya.monto)||0) + ahorro;
+      } else {
+        c.ahorroHistorial.push({ mes: c.planMes, monto: ahorro, nombre: nombreMes });
+      }
+      c.ahorroAcumulado = (parseFloat(c.ahorroAcumulado)||0) + ahorro;
+    }
 
     // Resetear campos del mes nuevo
     c.otrosIngresos = 0;
     c.otrosIngresosList = [];
-    c.ahorroMensual = 0;   // el usuario vuelve a definir el ahorro del nuevo mes
-    // ingresoMensual se mantiene (suele ser el mismo)
+    c.ahorroMensual = 0;
+    // ingresoMensual se mantiene
 
     c.planMes = m;
     await saveCfg(c);
@@ -378,10 +393,19 @@ async function R_plan(c,gastos){
   const [yy,mm]=mesKey().split('-');
   const nombres=['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   const mesNombre=nombres[parseInt(mm,10)]+' '+yy;
-  // Ahorro que se ve = acumulado de meses anteriores + lo planificado este mes
-  const ahorroAcum = (parseFloat(c.ahorroAcumulado)||0) + (parseFloat(c.ahorroMensual)||0);
+
+  // Nombre del mes anterior para el saldo
+  const prev = prevMonthRange();
+  const [pyy,pmm] = prev.key.split('-');
+  const mesAntNombre = nombres[parseInt(pmm,10)]; // ej: "Septiembre"
+
+  // Ahorro total visible = historial + ahorro de este mes
+  const ahorroEsteMes = parseFloat(c.ahorroMensual)||0;
+  const ahorroAcumBase = parseFloat(c.ahorroAcumulado)||0;
+  const ahorroAcum = ahorroAcumBase + ahorroEsteMes;
   const tieneSaldoAnt = p.saldoAnterior > 0;
   const listaOtros = Array.isArray(c.otrosIngresosList) ? c.otrosIngresosList : [];
+  const historial = Array.isArray(c.ahorroHistorial) ? c.ahorroHistorial : [];
 
   // Lista de ingresos extras ya cargados este mes
   const listaHTML = listaOtros.length === 0
@@ -395,6 +419,22 @@ async function R_plan(c,gastos){
         </div>
       </div>`).join('');
 
+  // Desglose del historial de ahorro (meses anteriores + este mes)
+  let desgloseAhorro = '';
+  if(historial.length || ahorroEsteMes > 0){
+    const items = [...historial].sort((a,b)=>b.mes.localeCompare(a.mes));
+    if(ahorroEsteMes > 0){
+      items.unshift({ mes: mesKey(), monto: ahorroEsteMes, nombre: mesNombre + ' (actual)' });
+    }
+    desgloseAhorro = items.map(h => `
+      <div class="flex justify-between text-xs py-1 border-b border-pink-300/10 last:border-0">
+        <span class="text-violet-200">${h.nombre || h.mes}</span>
+        <span class="amt text-emerald-300">${sym} ${fmt(h.monto)}</span>
+      </div>`).join('');
+  } else {
+    desgloseAhorro = `<p class="text-[11px] text-violet-300/70">Todavía no hay ahorros registrados</p>`;
+  }
+
   $('#s-plan').innerHTML=`
   <h2 class="font-semibold text-pink-100 mb-1">Planificación</h2>
   <p class="text-xs text-violet-200 mb-3">${mesNombre} · define ingresos y ahorro</p>
@@ -402,7 +442,8 @@ async function R_plan(c,gastos){
   <div class="glass p-4 space-y-3 mb-4">
     <div>
       <label class="lab">Ingreso mensual</label>
-      <input class="inp" type="number" step="any" id="p-ingreso" value="${c.ingresoMensual||''}" placeholder="0.00" inputmode="decimal">
+      <input class="inp" type="number" step="any" id="p-ingreso" value="" placeholder="0.00" inputmode="decimal">
+      ${p.ingreso > 0 ? `<p class="text-[10px] text-violet-300 mt-1">Actual guardado: ${sym} ${fmt(p.ingreso)}</p>` : ''}
     </div>
 
     <!-- Otros ingresos: se agregan uno por uno -->
@@ -424,14 +465,19 @@ async function R_plan(c,gastos){
 
     <div>
       <label class="lab">Monto a ahorro</label>
-      <input class="inp" type="number" step="any" id="p-ahorro" value="${c.ahorroMensual||''}" placeholder="0.00" inputmode="decimal">
-      <p class="text-[10px] text-violet-300 mt-1">Lo que quieres apartar este mes</p>
+      <input class="inp" type="number" step="any" id="p-ahorro" value="" placeholder="0.00" inputmode="decimal">
+      <p class="text-[10px] text-violet-300 mt-1">Lo que quieres apartar este mes${ahorroEsteMes > 0 ? ` · Actual: ${sym} ${fmt(ahorroEsteMes)}` : ''}</p>
     </div>
     <button class="btn-main" onclick="savePlan()">Guardar planificación 💕</button>
   </div>
 
+  <!-- Resumen descriptivo -->
   <div class="card-pink p-4 space-y-2 text-sm">
-    ${tieneSaldoAnt ? `<div class="flex justify-between"><span class="text-pink-200">Saldo mes anterior</span><span class="amt text-emerald-300">+ ${sym} ${fmt(p.saldoAnterior)}</span></div>` : ''}
+    ${tieneSaldoAnt ? `
+    <div class="flex justify-between">
+      <span class="text-pink-200">Saldo mes de ${mesAntNombre}</span>
+      <span class="amt text-emerald-300">+ ${sym} ${fmt(p.saldoAnterior)}</span>
+    </div>` : ''}
     <div class="flex justify-between"><span class="text-pink-200">Ingreso mensual</span><span class="amt">${sym} ${fmt(p.ingreso)}</span></div>
     <div class="flex justify-between"><span class="text-pink-200">Otros ingresos</span><span class="amt">${sym} ${fmt(p.otros)}</span></div>
     <div class="flex justify-between"><span class="text-pink-200">Total ingresos</span><span class="amt font-semibold">${sym} ${fmt(p.totalIngresos)}</span></div>
@@ -442,15 +488,26 @@ async function R_plan(c,gastos){
     </div>
   </div>
 
-  <div class="glass p-3 mt-3 flex items-center justify-between">
-    <div>
-      <p class="text-[10px] text-pink-300 uppercase tracking-wide">Ahorro acumulado total</p>
-      <p class="text-lg amt text-emerald-300 mt-0.5">${sym} ${fmt(ahorroAcum)}</p>
-      <p class="text-[10px] text-violet-300 mt-0.5">Incluye el ahorro de este mes</p>
+  <!-- Ahorro acumulado (tocable para ver desglose) -->
+  <div class="glass p-3 mt-3" onclick="toggleDesgloseAhorro()" style="cursor:pointer">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-[10px] text-pink-300 uppercase tracking-wide">Ahorro acumulado total</p>
+        <p class="text-lg amt text-emerald-300 mt-0.5">${sym} ${fmt(ahorroAcum)}</p>
+        <p class="text-[10px] text-violet-300 mt-0.5">Toca para ver desglose por mes</p>
+      </div>
+      <div class="text-2xl">🐷</div>
     </div>
-    <div class="text-2xl">🐷</div>
+    <div id="desglose-ahorro" class="hidden mt-3 pt-2 border-t border-pink-300/20">
+      ${desgloseAhorro}
+    </div>
   </div>
   <p class="text-[10px] text-center text-violet-300 mt-3">El disponible y el ahorro también se muestran en Inicio</p>`;
+}
+
+function toggleDesgloseAhorro(){
+  const el = document.getElementById('desglose-ahorro');
+  if(el) el.classList.toggle('hidden');
 }
 
 async function agregarOtroIngreso(){
@@ -467,12 +524,11 @@ async function agregarOtroIngreso(){
     desc: desc || 'Ingreso extra',
     fecha: today()
   });
-  // Recalcular total
   c.otrosIngresos = c.otrosIngresosList.reduce((s,i)=>s+(parseFloat(i.monto)||0),0);
   c.planMes = mesKey();
   await saveCfg(c);
   toast('Ingreso agregado ✨');
-  go('plan'); // re-render, campos quedan en blanco
+  go('plan');
 }
 
 async function quitarOtroIngreso(idx){
@@ -486,14 +542,21 @@ async function quitarOtroIngreso(idx){
 }
 
 async function savePlan(){
-  const c=await cfg();
-  c.ingresoMensual=parseFloat($('#p-ingreso').value)||0;
-  // otrosIngresos se maneja con agregarOtroIngreso / quitarOtroIngreso
-  c.ahorroMensual=parseFloat($('#p-ahorro').value)||0;
-  c.planMes=mesKey();
+  const c = await cfg();
+  const ingresoVal = $('#p-ingreso').value;
+  const ahorroVal  = $('#p-ahorro').value;
+
+  // Solo actualiza si el usuario escribió algo (si deja en blanco, mantiene el valor anterior)
+  if(ingresoVal !== '' && ingresoVal != null){
+    c.ingresoMensual = parseFloat(ingresoVal) || 0;
+  }
+  if(ahorroVal !== '' && ahorroVal != null){
+    c.ahorroMensual = parseFloat(ahorroVal) || 0;
+  }
+  c.planMes = mesKey();
   await saveCfg(c);
   toast('Planificación guardada ✨');
-  go('plan');
+  go('plan'); // re-render con los campos en blanco
 }
 
 async function R_list(gastos,c){
