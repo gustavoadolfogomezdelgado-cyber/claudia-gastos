@@ -411,11 +411,14 @@ async function R_plan(c,gastos){
   const listaHTML = listaOtros.length === 0
     ? `<p class="text-[11px] text-violet-300/70">Aún no agregaste ingresos extras</p>`
     : listaOtros.map((item, idx) => `
-      <div class="flex justify-between items-center text-xs py-1 border-b border-pink-300/10 last:border-0">
-        <span class="text-violet-200 truncate pr-2">${item.desc || 'Sin descripción'}</span>
+      <div class="flex justify-between items-center text-xs py-1.5 border-b border-pink-300/10 last:border-0">
+        <div class="min-w-0 pr-2">
+          <div class="text-violet-200 truncate">${item.desc || 'Sin descripción'}</div>
+          ${item.fecha ? `<div class="text-[10px] text-violet-300/70">${item.fecha}</div>` : ''}
+        </div>
         <div class="flex items-center gap-2 shrink-0">
           <span class="amt text-emerald-300">+ ${sym} ${fmt(item.monto)}</span>
-          <button class="btn-ghost" style="padding:1px 6px;font-size:10px" onclick="quitarOtroIngreso(${idx})">✕</button>
+          <button class="btn-ghost" style="padding:1px 7px;font-size:11px" onclick="quitarOtroIngreso(${idx})">✕</button>
         </div>
       </div>`).join('');
 
@@ -453,18 +456,10 @@ async function R_plan(c,gastos){
     <!-- Otros ingresos: se agregan uno por uno -->
     <div class="border border-pink-300/20 rounded-xl p-3 space-y-2">
       <label class="lab">Otros ingresos del mes</label>
-      <p class="text-[10px] text-violet-300 -mt-1 mb-1">Cada vez que agregues uno se guarda y la casilla queda lista para el siguiente</p>
+      <p class="text-[10px] text-violet-300 -mt-1 mb-1">Escribe el monto y pulsa “Agregar” o “Guardar planificación”: se suma al total</p>
       <input class="inp" type="number" step="any" id="p-otros" value="" placeholder="Monto (ej: 50)" inputmode="decimal">
       <input class="inp" type="text" id="p-otros-desc" value="" placeholder="¿De qué es? (ej: Bono, regalo…)">
       <button class="btn-ghost w-full" style="padding:.55rem" onclick="agregarOtroIngreso()">＋ Agregar este ingreso</button>
-
-      <div class="mt-2 pt-2 border-t border-pink-300/15">
-        <div class="flex justify-between text-xs mb-1">
-          <span class="text-pink-200 font-semibold">Ya agregados este mes</span>
-          <span class="amt text-emerald-300">${sym} ${fmt(p.otros)}</span>
-        </div>
-        ${listaHTML}
-      </div>
     </div>
 
     <div>
@@ -473,6 +468,16 @@ async function R_plan(c,gastos){
       <p class="text-[10px] text-violet-300 mt-1">Lo que quieres apartar este mes${ahorroEsteMes > 0 ? ` · Actual: ${sym} ${fmt(ahorroEsteMes)}` : ''}</p>
     </div>
     <button class="btn-main" onclick="savePlan()">Guardar planificación 💕</button>
+
+    <!-- Neto de otros ingresos del mes: detalle + eliminar -->
+    <div class="border border-emerald-300/30 rounded-xl p-3">
+      <div class="flex justify-between items-center mb-1">
+        <span class="text-xs text-pink-200 font-semibold">Neto otros ingresos del mes</span>
+        <span class="amt text-emerald-300 font-semibold">${sym} ${fmt(p.otros)}</span>
+      </div>
+      <p class="text-[10px] text-violet-300 mb-2">Detalle de ingresos extras · toca ✕ para borrar alguno</p>
+      ${listaHTML}
+    </div>
   </div>
 
   <!-- Resumen descriptivo (orden pedido) -->
@@ -557,6 +562,7 @@ async function agregarOtroIngreso(){
 }
 
 async function quitarOtroIngreso(idx){
+  if(!confirm('¿Eliminar este ingreso extra?')) return;
   const c = await cfg();
   if(!Array.isArray(c.otrosIngresosList)) return;
   c.otrosIngresosList.splice(idx, 1);
@@ -570,6 +576,8 @@ async function savePlan(){
   const c = await cfg();
   const ingresoVal = $('#p-ingreso').value;
   const ahorroVal  = $('#p-ahorro').value;
+  const otrosVal   = $('#p-otros').value;
+  const otrosDesc  = ($('#p-otros-desc').value||'').trim();
 
   // Solo actualiza si el usuario escribió algo (si deja en blanco, mantiene el valor anterior)
   if(ingresoVal !== '' && ingresoVal != null){
@@ -578,6 +586,14 @@ async function savePlan(){
   if(ahorroVal !== '' && ahorroVal != null){
     c.ahorroMensual = parseFloat(ahorroVal) || 0;
   }
+  // Si hay un monto escrito en "Otros ingresos", se agrega a la lista y se suma
+  const montoOtro = parseFloat(otrosVal);
+  if(montoOtro > 0){
+    if(!Array.isArray(c.otrosIngresosList)) c.otrosIngresosList = [];
+    c.otrosIngresosList.push({ monto: montoOtro, desc: otrosDesc || 'Ingreso extra', fecha: today() });
+  }
+  c.otrosIngresos = (Array.isArray(c.otrosIngresosList) ? c.otrosIngresosList : [])
+    .reduce((s,i)=>s+(parseFloat(i.monto)||0),0);
   c.planMes = mesKey();
   await saveCfg(c);
   toast('Planificación guardada ✨');
